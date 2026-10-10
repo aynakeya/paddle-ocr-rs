@@ -1,7 +1,16 @@
-use ort::execution_providers::{
-    CANNExecutionProvider, CPUExecutionProvider, CUDAExecutionProvider, DirectMLExecutionProvider,
-    ExecutionProvider, ExecutionProviderDispatch,
-};
+#[cfg(feature = "cann-provider")]
+use ort::ep::CANN;
+#[cfg(feature = "cuda-provider")]
+use ort::ep::CUDA;
+#[cfg(target_os = "windows")]
+use ort::ep::DirectML;
+#[cfg(any(
+    feature = "cann-provider",
+    feature = "cuda-provider",
+    target_os = "windows"
+))]
+use ort::ep::ExecutionProvider;
+use ort::ep::{CPU, ExecutionProviderDispatch};
 
 use crate::{
     config::ProviderPreference,
@@ -35,7 +44,7 @@ pub fn resolve_execution_providers(
     fail_if_provider_unavailable: bool,
 ) -> Result<ProviderChain> {
     let cpu_provider = || {
-        CPUExecutionProvider::default()
+        CPU::default()
             .with_arena_allocator(enable_cpu_mem_arena)
             .build()
     };
@@ -87,9 +96,14 @@ fn resolve_cuda_execution_providers(
         device_id,
         cpu_provider,
         fail_if_provider_unavailable,
-        |id| {
-            let provider = CUDAExecutionProvider::default().with_device_id(id);
-            Ok((provider.is_available()?, provider.build()))
+        |_id| {
+            #[cfg(feature = "cuda-provider")]
+            {
+                let provider = CUDA::default().with_device_id(_id);
+                Ok(provider.is_available()?.then(|| provider.build()))
+            }
+            #[cfg(not(feature = "cuda-provider"))]
+            Ok(None)
         },
     )
 }
@@ -106,9 +120,14 @@ fn resolve_directml_execution_providers(
         device_id,
         cpu_provider,
         fail_if_provider_unavailable,
-        |id| {
-            let provider = DirectMLExecutionProvider::default().with_device_id(id);
-            Ok((provider.is_available()?, provider.build()))
+        |_id| {
+            #[cfg(target_os = "windows")]
+            {
+                let provider = DirectML::default().with_device_id(_id);
+                Ok(provider.is_available()?.then(|| provider.build()))
+            }
+            #[cfg(not(target_os = "windows"))]
+            Ok(None)
         },
     )
 }
@@ -125,9 +144,14 @@ fn resolve_cann_execution_providers(
         device_id,
         cpu_provider,
         fail_if_provider_unavailable,
-        |id| {
-            let provider = CANNExecutionProvider::default().with_device_id(id);
-            Ok((provider.is_available()?, provider.build()))
+        |_id| {
+            #[cfg(feature = "cann-provider")]
+            {
+                let provider = CANN::default().with_device_id(_id);
+                Ok(provider.is_available()?.then(|| provider.build()))
+            }
+            #[cfg(not(feature = "cann-provider"))]
+            Ok(None)
         },
     )
 }
@@ -142,25 +166,25 @@ fn resolve_accelerator_execution_providers<F>(
     prepare_provider: F,
 ) -> Result<ProviderChain>
 where
-    F: FnOnce(i32) -> Result<(bool, ExecutionProviderDispatch)>,
+    F: FnOnce(i32) -> Result<Option<ExecutionProviderDispatch>>,
 {
     let device_id_i32 = device_id_to_i32(provider_name, device_id)?;
-    let (is_available, provider_dispatch) = prepare_provider(device_id_i32)?;
+    let provider_dispatch = prepare_provider(device_id_i32)?;
     let resolution = decide_provider_resolution(
         requested,
         preferred,
-        is_available,
+        provider_dispatch.is_some(),
         fail_if_provider_unavailable,
     )?;
 
-    if resolution.fallback_used {
+    if let Some(provider_dispatch) = provider_dispatch {
         Ok(ProviderChain {
-            providers: vec![cpu_provider],
+            providers: vec![provider_dispatch, cpu_provider],
             resolution,
         })
     } else {
         Ok(ProviderChain {
-            providers: vec![provider_dispatch, cpu_provider],
+            providers: vec![cpu_provider],
             resolution,
         })
     }

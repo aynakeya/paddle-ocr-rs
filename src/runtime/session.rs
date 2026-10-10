@@ -5,9 +5,7 @@ use ndarray::{ArrayView2, ArrayView3, ArrayView4, ArrayViewD, Ix2, Ix3, Ix4};
 use ort::{
     inputs,
     session::{Session, builder::GraphOptimizationLevel},
-    tensor::TensorElementType,
-    value::TensorRef,
-    value::ValueType,
+    value::{TensorElementType, TensorRef, ValueType},
 };
 
 use crate::{
@@ -50,16 +48,22 @@ impl OrtSession {
         }
 
         let mut builder = Session::builder()?;
-        builder = builder.with_optimization_level(GraphOptimizationLevel::Level3)?;
+        builder = builder
+            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .map_err(ort::Error::from)?;
 
         let (intra_threads, inter_threads) = derive_runtime_threads(runtime_cfg);
 
         if let Some(intra) = intra_threads {
-            builder = builder.with_intra_threads(intra)?;
+            builder = builder
+                .with_intra_threads(intra)
+                .map_err(ort::Error::from)?;
         }
 
         if let Some(inter) = inter_threads {
-            builder = builder.with_inter_threads(inter)?;
+            builder = builder
+                .with_inter_threads(inter)
+                .map_err(ort::Error::from)?;
         }
 
         let provider_chain = resolve_execution_providers(
@@ -67,14 +71,20 @@ impl OrtSession {
             runtime_cfg.enable_cpu_mem_arena,
             runtime_cfg.fail_if_provider_unavailable,
         )?;
-        builder = builder.with_execution_providers(provider_chain.providers)?;
+        builder = builder
+            .with_execution_providers(provider_chain.providers)
+            .map_err(ort::Error::from)?;
 
         let session = builder.commit_from_file(model_path)?;
         validate_model_io_contract(model_path, &session, contract)?;
 
-        let output_names = session.outputs.iter().map(|v| v.name.clone()).collect();
+        let output_names = session
+            .outputs()
+            .iter()
+            .map(|v| v.name().to_owned())
+            .collect();
 
-        let character_list = match session.metadata()?.custom("character")? {
+        let character_list = match session.metadata()?.custom("character") {
             Some(raw) if !raw.trim().is_empty() => {
                 Some(raw.lines().map(|line| line.to_string()).collect())
             }
@@ -203,31 +213,31 @@ fn validate_model_io_contract(
     session: &Session,
     contract: SessionContract,
 ) -> Result<()> {
-    if session.inputs.len() != 1 {
+    if session.inputs().len() != 1 {
         return Err(RapidOcrError::Config(format!(
             "recognition model must expose exactly one input, got {} (model={})",
-            session.inputs.len(),
+            session.inputs().len(),
             model_path.display()
         )));
     }
-    if session.outputs.is_empty() {
+    if session.outputs().is_empty() {
         return Err(RapidOcrError::Config(format!(
             "recognition model must expose at least one output (model={})",
             model_path.display()
         )));
     }
 
-    let input = &session.inputs[0];
+    let input = &session.inputs()[0];
     validate_tensor_spec(
         model_path,
         "input",
-        &input.name,
-        &input.input_type,
+        input.name(),
+        input.dtype(),
         Some(4),
         TensorElementType::Float32,
     )?;
 
-    let output = &session.outputs[0];
+    let output = &session.outputs()[0];
     let output_rank = match contract {
         SessionContract::Rec => Some(3),
         SessionContract::Cls => Some(2),
@@ -236,8 +246,8 @@ fn validate_model_io_contract(
     validate_tensor_spec(
         model_path,
         "output",
-        &output.name,
-        &output.output_type,
+        output.name(),
+        output.dtype(),
         output_rank,
         TensorElementType::Float32,
     )?;
