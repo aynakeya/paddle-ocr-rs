@@ -5,7 +5,7 @@ It provides:
 
 ## Runtime compatibility
 
-This version uses `ort = 2.0.0-rc.13` and `ndarray 0.17`. The default
+This version is tested with `ort 2.0.0-rc.13` and `ndarray 0.17`. The default
 `download-binaries` feature uses the ONNX Runtime 1.28.0 distribution supplied
 by `ort`; applications sharing an ONNX Runtime instance should use the same
 `ort` version.
